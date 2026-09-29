@@ -1,4 +1,4 @@
-import { withFileMutationQueue, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type ToolInfo } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue, type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type ToolInfo } from "@earendil-works/pi-coding-agent";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,23 @@ export interface McpRuntimeSnapshotRequest {
   result?: McpRuntimeSnapshotResult;
 }
 
+export const MCP_RUNTIME_TOOL_CALL_EVENT = "pi-mcp-adapter:runtime-tool-call:v1" as const;
+export const MCP_RUNTIME_TOOL_CALL_VERSION = 1 as const;
+
+export type McpRuntimeToolCallResult =
+  | { ok: true; result: AgentToolResult<Record<string, unknown>> }
+  | { ok: false; error: Error };
+
+/** The adapter sets `result` to a promise during `emit()`; await it. */
+export interface McpRuntimeToolCallRequest {
+  version: typeof MCP_RUNTIME_TOOL_CALL_VERSION;
+  /** Tool name as accepted by `mcp({ tool })`. */
+  tool: string;
+  args?: Record<string, unknown>;
+  server?: string;
+  result?: Promise<McpRuntimeToolCallResult>;
+}
+
 // Fast path for callers that share the adapter's module and ExtensionAPI.
 const runtimeRegistrars = new WeakMap<ExtensionAPI, (name: string, definition: ServerEntry) => McpServerRegistration>();
 const runtimeSnapshotters = new WeakMap<ExtensionAPI, (name: string) => McpRuntimeServerSnapshot>();
@@ -179,6 +196,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   const sessionConfig = options.config !== undefined ? cloneMcpConfig(options.config) : undefined;
   const programmaticConfig = sessionConfig !== undefined;
   let state: McpExtensionState | null = null;
+  let sessionCtx: ExtensionContext | null = null;
   let initPromise: Promise<McpExtensionState> | null = null;
   let initStartedPromise: Promise<void> | null = null;
   let currentOwner: McpRuntimeOwner | null = null;
@@ -840,6 +858,38 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
       request.result = { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
     }
   });
+  pi.events.on(MCP_RUNTIME_TOOL_CALL_EVENT, (rawRequest: unknown) => {
+    if (typeof rawRequest !== "object" || rawRequest === null || Array.isArray(rawRequest)) return;
+    const request = rawRequest as McpRuntimeToolCallRequest;
+    if (request.result !== undefined) return;
+    const ctx = sessionCtx;
+    request.result = (async (): Promise<McpRuntimeToolCallResult> => {
+      try {
+        if (request.version !== MCP_RUNTIME_TOOL_CALL_VERSION) {
+          throw new Error(`Unsupported MCP runtime tool-call version: ${String(request.version)}`);
+        }
+        if (typeof request.tool !== "string" || request.tool.trim() === "") {
+          throw new Error("MCP runtime tool-call requires a non-empty `tool` name");
+        }
+        if (!ctx) throw new Error("MCP runtime tool calls require an active Pi session");
+        const callState = await awaitWithTimeout(ensureSessionRuntime(ctx), INIT_WAIT_TIMEOUT_MS);
+        if (callState === INIT_WAIT_TIMED_OUT) {
+          throw new Error(`MCP initialization is still in progress after ${INIT_WAIT_TIMEOUT_MS}ms`);
+        }
+        if (!callState) throw new Error("MCP is not initialized");
+        const guard = captureRuntimeGuard(callState);
+        const { executeCall } = await loadForRuntime(loadProxyModes, guard);
+        const result = await executeCall(callState, request.tool, request.args, request.server, getPiTools, undefined, "script");
+        assertRuntimeGuard(guard);
+        // Denials and tool errors resolve with details.error rather than rejecting.
+        const failure = result.details?.error;
+        if (failure !== undefined) return { ok: false, error: new Error(`MCP tool call failed: ${String(failure)}`) };
+        return { ok: true, result };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+      }
+    })();
+  });
 
   const getPiTools = (): ToolInfo[] => pi.getAllTools();
 
@@ -1081,6 +1131,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    sessionCtx = null;
     const builtInMcpDetected = hasBuiltInMcpCommand(pi);
     if (!builtInMcpDetected && !mcpAliasRegistered) {
       registerMcpCommand("mcp");
@@ -1122,6 +1173,9 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
     }
 
     if (generation !== lifecycleGeneration || !owner.isActive()) return;
+    // Recorded only after previous-session cleanup, so a runtime tool call cannot
+    // start initialization before session_start decides whether to defer it.
+    sessionCtx = ctx;
     if (state) return;
 
     if (!initPromise) {
@@ -1214,6 +1268,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   });
 
   pi.on("session_shutdown", async () => {
+    sessionCtx = null;
     ++lifecycleGeneration;
     const currentState = state;
     const owner = currentOwner;
