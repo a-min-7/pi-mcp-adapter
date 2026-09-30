@@ -115,7 +115,7 @@ export interface SetupPanelCallbacks {
   adoptImports: (imports: ImportKind[]) => Promise<{ added: ImportKind[]; path: string }>;
   scaffoldConfig: (target: SharedConfigTarget) => Promise<{ path: string }>;
   addRepoPrompt: (target: SharedConfigTarget) => Promise<{ path: string; serverName: string }>;
-  addKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => Promise<{ path: string; serverName: string; reachable?: boolean }>;
+  addKnownServer: (preset: KnownServerPreset, target: SharedConfigTarget) => Promise<{ path: string; serverName: string; reachable?: boolean; ignoredBecause?: string }>;
   openPath: (path: string) => Promise<void>;
   markSetupCompleted: () => void;
 }
@@ -540,7 +540,7 @@ class McpSetupPanelView implements Component {
               : "Servers here load in every project on this machine.",
           ),
           { text: "" },
-          ...this.prose(width, "Known servers and starter configs are written to the selected file."),
+          ...this.prose(width, "Known servers and starter configs are written to the selected file. Desktop app servers always go to the global file."),
           { text: "" },
           this.muted(state.sharedConfigTarget === action.target ? "Selected." : "Press enter to write new servers here."),
         ];
@@ -552,7 +552,8 @@ class McpSetupPanelView implements Component {
           ...this.heading(preset.name),
           ...this.prose(width, preset.summary),
           ...(preset.desktopApp ? [{ text: "" }, ...this.prose(width, preset.desktopApp.enableSteps)] : []),
-          ...this.writePreview(() => this.callbacks.previewKnownServer(preset, state.sharedConfigTarget), width, errors),
+          ...(preset.desktopApp ? [{ text: "" }, ...this.prose(width, "Always added to the global config because it depends on an app installed on this machine.")] : []),
+          ...this.writePreview(() => this.callbacks.previewKnownServer(preset, preset.desktopApp ? "global" : state.sharedConfigTarget), width, errors),
         ];
       }
       case "add-repoprompt": {
@@ -943,17 +944,19 @@ export class McpSetupPanel {
     if (action.id === "add-known-server" && action.preset) {
       const preset = action.preset;
       await this.runBusy(async () => {
-        const result = await this.callbacks.addKnownServer(preset, this.sharedConfigTarget);
+        const result = await this.callbacks.addKnownServer(preset, preset.desktopApp ? "global" : this.sharedConfigTarget);
         this.callbacks.markSetupCompleted();
         let status = "";
-        if (preset.desktopApp && result.reachable !== undefined) {
+        if (result.ignoredBecause) {
+          status = ` Pi won't use it: ${result.ignoredBecause}.`;
+        } else if (preset.desktopApp && result.reachable !== undefined) {
           status = result.reachable
             ? ` A server is answering at ${preset.entry.url}.`
             : ` Nothing is answering at ${preset.entry.url} yet. ${preset.desktopApp.enableSteps}`;
         }
         this.notice = {
           text: `Added ${result.serverName} to ${result.path}.${status} Pi will reload after this panel closes.`,
-          tone: result.reachable === false ? "warning" : "success",
+          tone: result.ignoredBecause || result.reachable === false ? "warning" : "success",
         };
       });
       return;
