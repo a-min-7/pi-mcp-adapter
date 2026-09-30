@@ -426,8 +426,10 @@ export interface McpSettings {
     directToolResultDetails?: "lean" | "bounded";
     /** Show the advisory when 75 or more direct tools resolve. Defaults to true. */
     warnOnLargeDirectTools?: boolean;
-    /** Register the trusted MCP-only JavaScript scripting tool. Defaults to true; set false to hide it. */
+    /** Register the MCP-only JavaScript scripting tool and its manual skill. Defaults to false. */
     scriptMode?: boolean;
+    /** `"model"` points the model at the mcp-scripting skill from the mcpScript description. Defaults to `"manual"`: `/skill:mcp-scripting` only. */
+    scriptSkill?: "manual" | "model";
     /** Expose MCP resources as tools (default: true). Set to false to disable globally across all servers. */
     exposeResources?: boolean;
     /** Optional Jev (System One) integrations. A valid key enables semantic search; script evaluation remains disabled by default. */
@@ -598,6 +600,14 @@ export interface ServerCacheEntry {
     /** Server-level hints from the aggregated tools/list result. */
     ttlMs?: ListToolsResult["ttlMs"];
     cacheScope?: ListToolsResult["cacheScope"];
+    /**
+     * Result shapes (field names and types, never values) seen from tools without an outputSchema,
+     * keyed by original tool name. Dropped when the server config or that tool's description or input schema changes.
+     */
+    outputShapes?: Record<string, {
+        source: "structuredContent" | "jsonText";
+        shape: unknown;
+    }>;
     cachedAt: number;
 }
 export interface MetadataCache {

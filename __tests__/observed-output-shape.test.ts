@@ -33,7 +33,7 @@ describe("observed output shapes", () => {
     await executeCall(state, "demo_list", {});
 
     const text = describeText(state);
-    expect(text).toContain("Observed output (structuredContent, from 2 calls this session, not a contract):\n"
+    expect(text).toContain("Observed output (structuredContent, from earlier calls, not a contract):\n"
       + "{ id: string; tags?: string[]; owner?: { name: string; }; count?: number; }");
     expect(text).not.toMatch(/secret-id|alpha|Ada/);
   });
@@ -47,7 +47,7 @@ describe("observed output shapes", () => {
     await execute("call-1", {}, undefined, undefined, {} as any);
 
     const text = describeText(state);
-    expect(text).toContain("Observed output (JSON text result, from 1 call this session, not a contract):\nRecord<string, number>");
+    expect(text).toContain("Observed output (JSON text result, from earlier calls, not a contract):\nRecord<string, number>");
     expect(text).not.toContain("example.com");
   });
 
@@ -69,6 +69,18 @@ describe("observed output shapes", () => {
     expect(describeText(state)).not.toContain("Observed output");
   });
 
+  it("records a result against the tool definition it was called under", async () => {
+    const state = stateWith([]);
+    state.manager.getConnection().client.callTool.mockImplementationOnce(async () => {
+      // A tools/list_changed refresh lands while the call is in flight.
+      state.toolMetadata.set("demo", [{ name: "demo_list", originalName: "list", description: "List things, now paginated" }]);
+      return { content: [], structuredContent: { oldField: 1 } };
+    });
+    await executeCall(state, "demo_list", {});
+
+    expect(describeText(state)).not.toContain("oldField");
+  });
+
   it("starts over when the server is replaced under the same name", async () => {
     const state = stateWith([{ content: [], structuredContent: { id: "x" } }]);
     await executeCall(state, "demo_list", {});
@@ -83,5 +95,34 @@ describe("observed output shapes", () => {
     await executeCall(state, "demo_list", {});
 
     expect(describeText(state)).toContain("\nRecord<string, { id: string; }>");
+  });
+
+  it("keeps a nested list field that sits beside wide objects", async () => {
+    const person = Object.fromEntries(Array.from({ length: 35 }, (_, index) => [`link${index}_url`, "https://example.com"]));
+    const issue = { number: 1, user: person, assignee: person, assignees: [person], labels: [{ name: "bug" }] };
+    const state = stateWith([{ content: [{ type: "text", text: JSON.stringify([issue]) }] }]);
+    await executeCall(state, "demo_list", {});
+
+    expect(describeText(state)).toContain("labels: { name: string; }[];");
+  });
+
+  it("writes a wide object that repeats once as a named type", async () => {
+    const person = { login: "ada", id: 1, avatar_url: "https://example.com/a", html_url: "https://example.com/ada", followers_url: "https://example.com/f" };
+    const state = stateWith([{ content: [], structuredContent: { user: person, assignee: person, reviewers: [person] } }]);
+    await executeCall(state, "demo_list", {});
+
+    expect(describeText(state)).toContain(
+      "type User = { login: string; id: number; avatar_url: string; html_url: string; followers_url: string; };\n"
+      + "{ user: User; assignee: User; reviewers: User[]; }",
+    );
+  });
+
+  it("names repeated objects under numeric-looking fields with valid, distinct type names", async () => {
+    const words = { alpha: "a", bravo: "b", charlie: "c", delta: "d", echo: "e", foxtrot: "f" };
+    const counts = { alpha: 1, bravo: 2, charlie: 3, delta: 4, echo: 5, foxtrot: 6 };
+    const state = stateWith([{ content: [], structuredContent: { $123: words, first: words, _123: counts, second: counts } }]);
+    await executeCall(state, "demo_list", {});
+
+    expect(describeText(state)).toContain("{ $123: T123; first: T123; _123: T1232; second: T1232; }");
   });
 });

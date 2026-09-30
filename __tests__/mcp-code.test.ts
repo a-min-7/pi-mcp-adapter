@@ -32,9 +32,9 @@ function textBlocks(result: Awaited<ReturnType<typeof runMcpScript>>): string[] 
 }
 
 describe("runMcpScript", () => {
-  it("registers mcpScript by default", () => {
+  it("registers mcpScript when scriptMode is true", () => {
     const registerTool = vi.fn();
-    createMcpAdapter({ config: { settings: {}, mcpServers: {} } })({
+    createMcpAdapter({ config: { settings: { scriptMode: true }, mcpServers: {} } })({
       registerTool,
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
@@ -49,13 +49,28 @@ describe("runMcpScript", () => {
       promptSnippet: "Batch multiple MCP tool calls in one JavaScript request (loop, filter, chain)",
     }));
     const scriptTool = registerTool.mock.calls.find(([tool]) => tool.name === "mcpScript")?.[0];
-    expect(scriptTool.description).not.toContain("Load the mcp-scripting skill");
+    expect(scriptTool.description).not.toContain("SKILL.md");
     expect(registerTool).not.toHaveBeenCalledWith(expect.objectContaining({ name: "mcp_script" }));
   });
 
-  it("skips mcpScript when scriptMode is false", () => {
+  it("points mcpScript at the scripting skill when scriptSkill is model", () => {
     const registerTool = vi.fn();
-    createMcpAdapter({ config: { settings: { scriptMode: false }, mcpServers: {} } })({
+    createMcpAdapter({ config: { settings: { scriptMode: true, scriptSkill: "model" }, mcpServers: {} } })({
+      registerTool,
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn(),
+      events: { on: vi.fn(), emit: vi.fn() },
+      getAllTools: vi.fn(() => []),
+    } as any);
+
+    const scriptTool = registerTool.mock.calls.find(([tool]) => tool.name === "mcpScript")?.[0];
+    expect(scriptTool.description).toContain("skills/mcp-scripting/SKILL.md");
+  });
+
+  it("skips mcpScript by default", () => {
+    const registerTool = vi.fn();
+    createMcpAdapter({ config: { settings: {}, mcpServers: {} } })({
       registerTool,
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
@@ -331,10 +346,19 @@ describe("runMcpScript", () => {
     const result = await runMcpScript({ ...state, observedOutputs: new WeakMap() },
       'await tools.fixture_echo({ value: "hidden" }); return (await tools.describe({ path: "fixture_echo" })).observedOutput;');
     expect(JSON.parse(textBlocks(result).at(-1)!)).toEqual({
-      target: "data.structuredContent",
+      target: '(await tools.call("fixture_echo", args)).data.structuredContent',
       typeScript: "{ echoed: string; }",
-      calls: 1,
     });
+  });
+
+  it("lists the fields seen when a script finds nothing, and not when it returns data", async () => {
+    const empty = await runMcpScript({ ...state, observedOutputs: new WeakMap() },
+      'const result = await tools.fixture_echo({ value: "hidden" }); return result.data.structuredContent.items ?? [];');
+    expect(textBlocks(empty).join("\n")).toContain('(await tools.call("fixture_echo", args)).data.structuredContent is:\n{ echoed: string; }]');
+
+    const found = await runMcpScript({ ...state, observedOutputs: new WeakMap() },
+      'const result = await tools.fixture_echo({ value: "hidden" }); return result.data.structuredContent.echoed;');
+    expect(textBlocks(found).join("\n")).not.toContain("Result fields seen");
   });
 
   it("keeps active failed-backoff tools out of script describe results", async () => {

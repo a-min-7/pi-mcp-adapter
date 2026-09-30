@@ -7,12 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `mcpScript` is now off by default. To keep it, set `settings.scriptMode` to `true` in `mcp-adapter.json`. Its bundled skill, the `mcp` description's pointer to it, and the large-result hint below follow the same setting.
+- `observedOutput.target` from `tools.describe` is now the full expression that reads the JSON, such as `(await tools.call("github_list_issues", args)).data.structuredContent`, instead of `data.structuredContent`. Claude read `content` off the `{ ok, data }` envelope when given the short form.
+- `observedOutput` from `tools.describe` no longer has `calls`, and `describe` no longer says how many calls a shape came from, because saved shapes can come from earlier sessions.
+
 ### Added
 
 - Other extensions can call a configured MCP tool from their own code by emitting `pi-mcp-adapter:runtime-tool-call:v1` on Pi's event bus. The call goes through the same tool resolution and approval as `mcp({ tool })`, and `request.result` is a promise that resolves to `{ ok: true, result }` or `{ ok: false, error }`. Thanks to [@Djarid](https://github.com/Djarid) for [PR #735](https://github.com/nicobailon/pi-mcp-adapter/pull/735).
+- `settings.scriptSkill: "model"` adds the `mcp-scripting` skill's path to the `mcpScript` description so the model reads it before writing a script. The default, `"manual"`, keeps the skill to `/skill:mcp-scripting`.
+- With `mcpScript` on, observed output shapes are saved in `mcp-cache.json`, so a later session can script a tool without calling it first to see its fields. A saved shape holds field names and types only, and is used only while the tool's description and input schema stay the same; it is dropped when they or the server's config change.
+- When an `mcpScript` run throws, times out, or returns `[]`, `{}`, `null`, `""`, or nothing, the result ends with the output shapes seen from the tools it called, so a wrong field guess can be fixed without a separate call to look at the data.
+
+### Changed
+
+- The `mcp-scripting` skill is about half its former length; `jev.evaluate` details moved to `references/jev.md`.
+- The `mcpScript` description now says that a tool call's `data` is the raw MCP result and how to read JSON from it.
+- With `mcpScript` on, MCP tool results of 8 KiB or more end with a one-line hint to use it when passing them to another call, so models stop retyping large results by hand.
+- Observed output shapes write a wide object that appears more than once as a named type, so a GitHub-style issue list shape is about 40% shorter with every field still listed.
+- The `mcp-scripting` skill now says to write the real script first, check the first item's fields before a loop that writes, and fix the script from the fields listed when it fails or finds nothing.
 
 ### Fixed
 
+- The `mcp` tool description mentions `mcpScript` only when it is registered. Before, it pointed to `mcpScript` even with `settings.scriptMode` set to `false`.
+- Claude no longer calls tools such as `tracker_tracker_list_issues` in `mcpScript`. The `code` parameter said `tools.<prefixedToolName>`, so it added the server prefix to names that already had it; its example is now `tools.call("github_search_issues", args)`, with the name exactly as `mcp` lists it.
+- Observed output shapes in `describe` no longer drop nested fields such as `labels: { name: string }[]` on GitHub-style lists. The size limit was measured on a stored form about 2.5 times longer than the text `describe` shows.
 - The adapter now detects Pi's built-in MCP extension. Pi 0.99 names it `builtin:mcp`, which the adapter did not recognize, so it took over `/mcp` and warned about `mcp.json` on every start even though the built-in extension owns that file. Thanks to [@Sebastianlopez-dev](https://github.com/Sebastianlopez-dev) for reporting it in [#736](https://github.com/nicobailon/pi-mcp-adapter/issues/736).
 
 ## [3.3.0] - 2026-09-29

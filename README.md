@@ -607,7 +607,8 @@ When any enabled server uses `eager` or `keep-alive`, initialization also starts
 | `directToolResultDetails` | Direct-tool result details: `"lean"` (default) or `"bounded"` to retain the guarded raw MCP result. |
 | `warnOnLargeDirectTools` | Show the advisory when 75 or more direct tools resolve (default: `true`). Set to `false` to suppress only this advisory. |
 | `freezeDirectTools` | Keep direct-tool registration stable after the initial sync so metadata updates and explicit reconnects do not rebuild the system prompt. Proxy/search/cache metadata still refreshes. Default: false. |
-| `scriptMode` | Register the MCP-only `mcpScript` plain-JavaScript tool (default: true). Set to `false` to hide it. |
+| `scriptMode` | Register the MCP-only `mcpScript` plain-JavaScript tool and its bundled skill (default: false). Read when Pi loads the adapter; run `/reload` after changing it. |
+| `scriptSkill` | How the model finds the bundled `mcp-scripting` skill when `scriptMode` is on: `"manual"` (default) keeps it to `/skill:mcp-scripting`; `"model"` adds its path to the `mcpScript` description so the model reads it before writing a script. |
 | `exposeResources` | Expose MCP resources as tools (default: `true`). Set to `false` to disable globally across all servers. Per-server `exposeResources` overrides this. |
 | `jev` | Optional System One Jev settings. A valid System One key enables semantic search across every enabled MCP server by default; `semanticSearch: false` disables it. `scriptEvaluation` remains disabled by default and requires an `allowedServers` source allowlist when enabled. `jev: false` disables both. Run `/mcp-adapter jev setup` for guided configuration. |
 | `disableProxyTool` | Hide the `mcp` proxy tool once configured direct tools are fully available from cache. Ignored while any server uses `directTools: "search"`, whose tools are registered inactive and can only be activated through the gateway (`mcp({ search })` or a successful `mcp({ tool })` call). |
@@ -759,9 +760,9 @@ Optional `jev` controls bound timeout/retries, request and script budgets, seman
 
 Semantic search sends your request and the available tool descriptions to Jev, which works out which tools best match what you’re trying to do. In a live test with 12 everyday requests and 95 tools and resources, Jev chose the expected result first in 10 of 11 answerable cases and placed it second once. Regular text search found the expected result first in 5 cases. Jev also correctly returned no result for an unrelated request. This was a small test using one local setup, so results will vary with different tools and queries.
 
-For multi-call MCP work, write ordinary JavaScript: discover, inspect, call, loop, filter, chain, or fan out, then return one result. Run that code with the default-on `mcpScript` tool. For a single MCP call, search, describe, status check, or auth action, use `mcp` instead. Set `settings.scriptMode` to `false` to hide both the scripting tool and its bundled skill.
+For multi-call MCP work, write ordinary JavaScript: discover, inspect, call, loop, filter, chain, or fan out, then return one result. Run that code with the `mcpScript` tool, which is off by default; set `settings.scriptMode` to `true` to register it and its bundled skill. For a single MCP call, search, describe, status check, or auth action, use `mcp` instead.
 
-The bundled `mcp-scripting` skill is manual-only by default, so its description is not added to the model's automatic skill context. Use `/skill:mcp-scripting` when you want its detailed workflow.
+The bundled `mcp-scripting` skill is manual-only: use `/skill:mcp-scripting`, or set `settings.scriptSkill` to `"model"` so the `mcpScript` description tells the model where to read it.
 
 For example, this is the JavaScript passed as the `code` argument to `mcpScript`:
 
@@ -779,7 +780,7 @@ emit({ tool: details.path, completed: true });
 return result.data;
 ```
 
-Depending on the server, successful `result.data` may be the raw MCP `CallToolResult` envelope rather than the domain payload. Check `result.data.structuredContent` for the fields your script expects; if they are absent, inspect text blocks in `result.data.content` too. If neither shape is understood, return the envelope for inspection instead of coercing it to an empty collection.
+For tool calls, successful `result.data` is the raw MCP `CallToolResult`, not the domain payload; resource reads return text. Use `result.data.structuredContent` when present. Otherwise most JSON APIs return their payload as text, so parse `result.data.content[0].text`. If neither shape is understood, return the envelope for inspection instead of coercing it to an empty collection.
 
 See the bundled `mcp-scripting` skill for the complete workflow guide. The API is `await tools.search({ query, server?, limit?, offset? })`, `await tools.describe({ path })`, `tools.call(path, args)`, direct flat calls, `emit(value)`, and a captured `console`. Use ordinary JavaScript loops and Promise utilities for composition; fluent helpers such as `tools.find(...).one()`, `tools.parallel(...)`, and `tools.retry(...)` are not provided. MCP calls return `{ ok: true, data }` or `{ ok: false, error: { code, message } }`, so a failed call does not stop the rest of the script. Result details include a concise `calls` trace with each operation, its path or query, outcome, and duration. Emitted values and console output appear before the script's final return value, and the combined result uses the normal MCP output guard. The default timeout is 30 seconds; each script runs in a worker thread that is terminated at the deadline, including for infinite loops.
 
@@ -1061,7 +1062,9 @@ Keys match a tool's original name, prefixed name, or a glob (`*` applies to ever
 
 When `includeSchemas` is enabled, search and describe render common JSON Schema parameters as compact TypeScript shapes like `{ query: string; limit?: number; }`, with the older schema formatter retained as a fallback for unsupported schemas.
 
-Most tools declare no output schema. After such a tool returns structured content or a JSON text result, `describe` (and `tools.describe` in `mcpScript`) also shows the output shape seen so far this session: field names and types only, never values. It lives in memory only and is labeled as observed, not a contract.
+Most tools declare no output schema. After such a tool returns structured content or a JSON text result, `describe` (and `tools.describe` in `mcpScript`) also shows the output shape seen so far: field names and types only, never values, labeled as observed, not a contract. A wide object that appears more than once, such as a user under `user`, `assignee`, and `assignees`, is written once as a named type. With `scriptMode` on, shapes are also saved in `mcp-cache.json`, so later sessions can write a script without calling the tool first. A shape is used only while the tool's description and input schema stay the same, and a saved one is dropped when they or the server's config change.
+
+When an `mcpScript` run throws, times out, or returns `[]`, `{}`, `null`, `""`, or nothing, its result ends with the shapes seen from the schemaless tools it called, so the model can fix a wrong field guess without a separate look at the data.
 
 For HTTP servers, Pi reports HTTP 503 as temporary unavailability and does not add another immediate retry loop. Keep-alive servers keep cached metadata available and retry after 30 seconds, backing off to 5 minutes. Other failed connects run a one-request shape probe that can turn opaque transport errors into setup hints such as `endpoint returned HTML (200) — this URL does not appear to speak MCP`. Healthy connections are not probed.
 
