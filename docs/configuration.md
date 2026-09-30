@@ -83,6 +83,12 @@ Servers defined or changed by project-scoped MCP files (`.mcp.json`, `.pi/mcp-ad
 
 In print, JSON, and RPC sessions, an unapproved project server is skipped. To intentionally allow project servers in trusted headless sessions, set `"projectServers": "allow"` in the **user-global** `settings` object. The default is `"ask"`; project files cannot change this policy. Explicit config files, programmatic configuration, global/import/plugin servers, and runtime registrations retain their existing behavior. Project servers are always excluded from extension-load initialization and are admitted only after `session_start` supplies Pi's trust context.
 
+## Check servers from a shell
+
+`pi-mcp-adapter doctor` loads the config a session in the current directory would, gives each enabled server 15 seconds to connect, and prints one line per server: name, state (`ok`, `failed`, `needs-auth`, `blocked`, or `disabled`), tool count, and the error or a hint. Secret commands (`!command` values) run with their own timeouts. `--json` prints the same report as a JSON array. It exits 1 when an enabled server fails or needs a sign-in; blocked and disabled servers don't count.
+
+Project servers follow the trust and approval rules above as in a non-interactive session. If Pi can't be loaded from where the CLI is installed, the project is treated as untrusted. Doctor never starts OAuth: a server without a stored sign-in is reported as `needs-auth`; sign in with `/mcp-auth <server>` in Pi. Errors show only what the adapter can state itself, such as the HTTP status, network error code, or endpoint probe result; doctor never prints server output, response bodies, or configured secrets. Run a failing command directly to see its output.
+
 ## Lifecycle Modes
 
 - **`lazy`** (default) — Don't connect at startup. Connect on first tool call. Disconnect after idle timeout. Cached metadata keeps search/list working without connections.

@@ -74,6 +74,10 @@ function printHelp(log = console.log) {
   log("  pi-mcp-adapter init --dry-run");
   log("  pi-mcp-adapter init --discover-host-configs  Opt in to host config fallback discovery");
   log("");
+  log("Check configured servers (exits 1 when an enabled server fails):");
+  log("  pi-mcp-adapter doctor         Connect each enabled server and report its state and tool count");
+  log("  pi-mcp-adapter doctor --json  Print the same report as a JSON array");
+  log("");
   log("Bearer token storage (servers configured with auth: \"bearer\" and bearerTokenStore: true):");
   log("  pi-mcp-adapter token set <server>     Store a token read from stdin (masked prompt or pipe; never argv)");
   log("  pi-mcp-adapter token status <server>  Report whether a stored token matches the configured URL");
@@ -413,6 +417,189 @@ async function runKey(argv, log, error, stdin) {
   return 0;
 }
 
+const DOCTOR_CONNECT_TIMEOUT_MS = 15_000;
+
+// A second layer behind describeConnectError: messages can still name configured values.
+// Values under 4 characters are flags such as DEBUG=1, and redacting them would garble the text.
+function redactDoctorMessage(text, definition, utils) {
+  const configured = [definition.bearerToken, definition.oauth?.clientSecret, ...Object.values(definition.headers ?? {}), ...Object.values(definition.env ?? {})];
+  if (definition.bearerTokenEnv) configured.push(process.env[definition.bearerTokenEnv]);
+  if (typeof definition.url === "string") {
+    try {
+      configured.push(...new URL(utils.interpolateEnvVars(definition.url)).searchParams.values());
+    } catch {
+      // An invalid URL is reported without its value.
+    }
+  }
+  const secrets = configured
+    .filter((value) => typeof value === "string")
+    .flatMap((value) => [value, utils.interpolateEnvVars(value)])
+    .flatMap((value) => [value, ...value.split(/\s+/)])
+    .filter((value) => value.length >= 4)
+    .sort((left, right) => right.length - left.length);
+  let redacted = text;
+  for (const secret of secrets) redacted = redacted.replaceAll(secret, "***");
+  return redacted;
+}
+
+// Doctor prints only facts the adapter composes, never server-originated text such as HTTP
+// response bodies or child stderr: those can carry secrets that no configured value reveals.
+function describeConnectError(err, definition, url) {
+  if (!definition.url) {
+    // server-manager appends the child's stderr as `${message} (${stderr})`, keeping the original as cause.
+    const base = err.cause instanceof Error && err.message.startsWith(`${err.cause.message} (`) ? err.cause : err;
+    const message = typeof base.code === "number" ? `server returned JSON-RPC error ${base.code}` : base.message;
+    return definition.command ? `${message} — run the command directly to see its output` : message;
+  }
+  // Adapter-composed failures of secret commands and CA files, thrown before any response.
+  if (/^(Failed to resolve MCP server|HTTP request headers command|MCP caFile|Missing environment variable in MCP caFile)/.test(err.message)) {
+    return err.message;
+  }
+  let status;
+  const codes = new Set();
+  const pending = [err];
+  const seen = new Set();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current !== "object" || current === null || seen.has(current)) continue;
+    seen.add(current);
+    if (typeof current.status === "number") status ??= current.status;
+    status ??= /\(HTTP (\d{3})\)/.exec(current.message ?? "")?.[1];
+    if (typeof current.code === "string" && /^E[A-Z]+$/.test(current.code)) codes.add(current.code);
+    pending.push(current.cause, current.data?.cause, ...(current instanceof AggregateError ? current.errors : []));
+  }
+  const parts = [...(status ? [`HTTP ${status}`] : []), ...codes];
+  // server-manager appends the probe classification to the original message, keeping it as cause.
+  const suffix = err.cause instanceof Error && err.message.startsWith(err.cause.message) ? err.message.slice(err.cause.message.length) : "";
+  if (suffix.startsWith(" — probe: ")) parts.push(suffix.slice(3));
+  if (codes.has("ECONNREFUSED") && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname)) {
+    const configured = definition.url.replace(/[?#].*$/s, "").replace(/^([a-z][a-z\d+.-]*:\/\/)[^/]*@/i, "$1");
+    parts.push(`Nothing is listening at ${configured}. Start the app or local process that serves this MCP server.`);
+  }
+  return parts.length > 0 ? parts.join(" — ") : "connection failed";
+}
+
+async function runDoctor(argv, log, error) {
+  const json = argv[0] === "--json";
+  if (argv.length > (json ? 1 : 0)) {
+    error("Usage: pi-mcp-adapter doctor [--json]");
+    return 1;
+  }
+  let config, trust, manager, auth, authFlow, utils, agentDir;
+  try {
+    [config, trust, manager, auth, authFlow, utils, agentDir] = await Promise.all([
+      import("./dist/config.js"),
+      import("./dist/project-server-trust.js"),
+      import("./dist/server-manager.js"),
+      import("./dist/mcp-auth.js"),
+      import("./dist/mcp-auth-flow.js"),
+      import("./dist/utils.js"),
+      import("./dist/agent-dir.js"),
+    ]);
+  } catch (err) {
+    error("Unable to load doctor command modules.");
+    error(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  const cwd = process.cwd();
+  const loaded = config.loadMcpConfigWithSources(undefined, cwd);
+  let projectTrusted = false;
+  if (loaded.projectServers.size > 0) {
+    try {
+      // Pi is a peer dependency and may not resolve from where this CLI is installed.
+      const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+      projectTrusted = new ProjectTrustStore(agentDir.getAgentDir()).get(cwd) === true;
+    } catch (err) {
+      error(`Could not read Pi's project trust, so project servers are treated as untrusted: ${utils.formatTerminalError(err)}`);
+    }
+  }
+  const { config: effective, blockedServers } = await trust.applyProjectServerTrust(loaded, {
+    cwd,
+    hasUI: false,
+    isProjectTrusted: () => projectTrusted,
+  });
+  const authOptions = auth.getAuthStorageOptions(effective.settings?.oauthDir, cwd, effective.settings?.oauthCredentialStore);
+  const serverManager = new manager.McpServerManager(cwd);
+  serverManager.setDefaultRequestTimeoutMs(effective.settings?.requestTimeoutMs);
+  serverManager.setAuthStorageOptions(authOptions);
+
+  const check = async (name, definition, signal) => {
+    const block = blockedServers.get(name);
+    if (block) return { state: "blocked", message: trust.describeProjectServerBlock(block.reason) };
+    if (definition.disabled === true) return { state: "disabled" };
+    const needsSignIn = { state: "needs-auth", message: `sign-in required: run /mcp-auth ${name} in Pi` };
+    let anonymous = false;
+    let url;
+    if (definition.url) {
+      try {
+        url = utils.resolveServerUrl(definition);
+      } catch {
+        const missing = typeof definition.url === "string" ? utils.getMissingEnvVars(definition.url) : [];
+        return { state: "failed", message: missing.length > 0 ? `URL uses unset environment variables: ${missing.join(", ")}` : "URL is invalid" };
+      }
+      // Report a missing sign-in from stored credentials instead of starting OAuth.
+      if (authFlow.supportsOAuth(definition)) {
+        const stored = auth.inspectAuthForUrl(name, url, authOptions);
+        if (stored.status === "unavailable") return { state: "failed", message: stored.message };
+        // A record without tokens is an unfinished sign-in.
+        if (stored.status === "absent" || !(stored.entry.tokens?.accessToken || stored.entry.tokens?.refreshToken)) {
+          if (definition.auth === "oauth") return needsSignIn;
+          anonymous = true;
+        }
+      }
+    }
+    // Anonymous attempts get no OAuth provider, and debug stderr would bypass redaction.
+    const connectDefinition = { ...definition, debug: false, ...(anonymous ? { oauth: false } : {}) };
+    try {
+      const connection = await serverManager.connect(name, connectDefinition, signal);
+      return connection.status === "needs-auth" ? needsSignIn : { state: "ok", tools: connection.tools.length };
+    } catch (err) {
+      if (anonymous && [err, err?.cause].some(manager.isUnauthorizedHttpError)) return needsSignIn;
+      return { state: "failed", message: describeConnectError(err, definition, url) };
+    }
+  };
+
+  let results;
+  try {
+    results = await Promise.all(Object.entries(effective.mcpServers).map(async ([name, definition]) => {
+      // The deadline covers the whole check, including server-manager's follow-up probe.
+      const controller = new AbortController();
+      let timer;
+      const timedOut = new Promise((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve({ state: "failed", message: `no response within ${DOCTOR_CONNECT_TIMEOUT_MS / 1000}s` });
+        }, DOCTOR_CONNECT_TIMEOUT_MS);
+      });
+      const result = await Promise.race([
+        check(name, definition, controller.signal).catch((err) => ({ state: "failed", message: utils.formatTerminalError(err) })),
+        timedOut,
+      ]);
+      clearTimeout(timer);
+      return {
+        name,
+        state: result.state,
+        tools: result.tools ?? null,
+        message: result.message ? utils.sanitizeTerminalText(redactDoctorMessage(result.message, definition, utils)) : null,
+      };
+    }));
+  } finally {
+    await serverManager.closeAll();
+  }
+
+  if (json) {
+    log(JSON.stringify(results, null, 2));
+  } else {
+    if (results.length === 0) log("No MCP servers configured.");
+    for (const result of results) {
+      const tools = result.tools === null ? "" : `, ${result.tools} tool${result.tools === 1 ? "" : "s"}`;
+      log(`${utils.sanitizeTerminalText(result.name)}: ${result.state}${tools}${result.message ? ` — ${result.message}` : ""}`);
+    }
+  }
+  return results.some((result) => result.state === "failed" || result.state === "needs-auth") ? 1 : 0;
+}
+
 export async function main(argv = process.argv.slice(2), log = console.log, error = console.error, stdin = process.stdin) {
   const [command, ...rest] = argv;
 
@@ -427,6 +614,10 @@ export async function main(argv = process.argv.slice(2), log = console.log, erro
 
   if (command === "key") {
     return runKey(rest, log, error, stdin);
+  }
+
+  if (command === "doctor") {
+    return runDoctor(rest, log, error);
   }
 
   if (command === "install") {

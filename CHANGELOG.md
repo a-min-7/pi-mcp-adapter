@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Server entries accept a `description`, the same key as Pi's `mcp.json`. `mcp({ server })` shows it, `mcp({ search })` ranks the server's tools by it, and the `/mcp-adapter` panel shows it when you expand the server, falling back to the first line of the server's instructions.
+- `pi-mcp-adapter doctor [--json]` checks your MCP servers from a shell or CI: each enabled server's state, tool count, and error or hint, exiting 1 when one fails. It follows project trust and never starts OAuth. See [Check servers from a shell](docs/configuration.md#check-servers-from-a-shell).
 
 ### Changed
 
