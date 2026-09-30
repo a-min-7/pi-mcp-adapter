@@ -32,6 +32,7 @@ import { supportsOAuth, authenticate, removeAuth, type McpOAuthRuntime } from ".
 import { getAuthStorageOptions, inspectAuthForUrl } from "./mcp-auth.ts";
 import { inspectBearerTokenForUrl, removeBearerToken } from "./mcp-bearer-store.ts";
 import { loadOnboardingState, markSetupCompleted as persistSetupCompleted, markSharedConfigHintShown } from "./onboarding-state.ts";
+import { findPiSignInImports, importPiSignIn } from "./pi-signin-import.ts";
 import { formatTerminalError, openPath, resolveServerUrl, sanitizeTerminalText } from "./utils.ts";
 import { isAbortError } from "./runtime-owner.ts";
 import { resolveJevCredential } from "./jev-key-store.ts";
@@ -794,6 +795,22 @@ export async function openMcpPanel(
 
   const { createMcpPanel } = await import("./mcp-panel.ts");
   let configChanged = false;
+  const authStorageOptions = state.authStorageOptions ?? {};
+  if (findPiSignInImports(config, authStorageOptions).length > 0) {
+    callbacks.importPiSignIns = () => {
+      const imported: string[] = [];
+      const failed: { server: string; error: string }[] = [];
+      for (const candidate of findPiSignInImports(config, authStorageOptions)) {
+        try {
+          importPiSignIn(candidate, authStorageOptions);
+          imported.push(candidate.serverName);
+        } catch (error) {
+          failed.push({ server: candidate.serverName, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return { imported, failed };
+    };
+  }
 
   await new Promise<void>((resolve) => {
     ctx.ui.custom(

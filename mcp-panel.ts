@@ -123,6 +123,7 @@ interface McpPanelViewState {
   authInFlight: string | null;
   authOnly: boolean;
   saveLabel: string | null;
+  canImportPiSignIns: boolean;
 }
 
 /**
@@ -283,6 +284,7 @@ class McpPanelView implements Component {
           this.theme.italic("ctrl+a") + " auth",
           this.theme.italic("ctrl+r") + " reconnect",
           this.theme.italic("ctrl+d") + " disable/enable",
+          ...(state.canImportPiSignIns ? [this.theme.italic("ctrl+p") + " import sign-ins from Pi"] : []),
           ...(this.selectedServerHasFailureMessage(state) ? [this.theme.italic("ctrl+y") + " copy error"] : []),
           this.theme.italic("?") + " desc search",
           ...(state.saveLabel ? [this.theme.italic(state.saveLabel) + " save"] : []),
@@ -462,6 +464,7 @@ class McpPanel {
   private importNotice: string | null = null;
   private authNotice: string | null = null;
   private authInFlight: string | null = null;
+  private piSignInsImported = false;
   private inactivityTimeout: ReturnType<typeof setTimeout> | null = null;
   private visibleItems: VisibleItem[] = [];
   private tui: { requestRender(): void };
@@ -818,6 +821,13 @@ class McpPanel {
       return;
     }
 
+    if (matchesKey(data, "ctrl+p")) {
+      if (!this.authOnly && !this.piSignInsImported && this.callbacks.importPiSignIns) {
+        this.importPiSignIns(this.callbacks.importPiSignIns);
+      }
+      return;
+    }
+
     if (data === "?") {
       if (this.authOnly) return;
       this.descSearchActive = true;
@@ -849,6 +859,19 @@ class McpPanel {
   private authenticateSelectedServer(item: VisibleItem): void {
     const server = this.servers[item.serverIndex];
     if (server) this.authenticateServer(server);
+  }
+
+  private importPiSignIns(importPiSignIns: NonNullable<McpPanelCallbacks["importPiSignIns"]>): void {
+    const { imported, failed } = importPiSignIns();
+    this.piSignInsImported = failed.length === 0;
+    const notices = [
+      ...(imported.length > 0 ? [`Imported sign-ins from Pi for ${imported.map(sanitizeDisplayText).join(", ")}. Reconnecting...`] : []),
+      ...failed.map(({ server, error }) => `Failed to import the sign-in from Pi for ${sanitizeDisplayText(server)}: ${sanitizeDisplayText(error)}`),
+    ];
+    this.authNotice = notices.length > 0 ? notices.join(" ") : "No sign-ins from Pi left to import.";
+    for (const server of this.servers) {
+      if (imported.includes(server.name)) this.reconnectServer(server);
+    }
   }
 
   private authenticateServer(server: ServerState): void {
@@ -1091,6 +1114,7 @@ class McpPanel {
       authInFlight: this.authInFlight,
       authOnly: this.authOnly,
       saveLabel: this.keys.saveLabel(),
+      canImportPiSignIns: !this.authOnly && !this.piSignInsImported && this.callbacks.importPiSignIns !== undefined,
     };
   }
 

@@ -134,6 +134,19 @@ This will:
 6. Complete the OAuth flow
 7. Store tokens securely
 
+### Import a sign-in from Pi's built-in MCP
+
+On Pi 0.99 and later, Pi's built-in MCP stores its OAuth sign-ins in `~/.pi/agent/mcp-auth.json` (under `PI_CODING_AGENT_DIR` when set). When a configured OAuth server has no adapter credentials for its URL and that URL exactly matches one in Pi's file, interactive sessions ask once per server and URL, at session start before any server connects:
+
+- **Import sign-in** copies Pi's tokens and client registration, bound to that URL. Pi's PKCE verifier and state are never copied.
+- **Sign in again** changes nothing; run `/mcp-auth <server>` when you need the server.
+
+If the server rotates refresh tokens, the adapter's first refresh can sign Pi's shell `pi mcp` commands out of that server.
+
+To import later, or for project servers (not covered by the startup prompt), press `ctrl+p` in `/mcp-adapter`. It imports every eligible server without asking and reconnects them. The action only appears when there is something to import.
+
+Pi's file is never changed. Nothing is imported in non-interactive sessions, with `settings.oauthCredentialStore: "encrypted-file"`, or for `client_credentials` servers. Malformed files and entries are skipped.
+
 ### Remote/headless authentication
 
 If Pi is running on a remote server, `/mcp-auth <server>` shows a clickable authorization URL first. Open it in your local browser and approve access, then select **Yes** in Pi to open the callback input. The browser may fail to load the loopback callback page because `127.0.0.1` refers to your workstation; copy the full URL from its address bar and paste it into Pi. The authorization screen closes automatically instead when the browser can reach Pi's callback directly.
