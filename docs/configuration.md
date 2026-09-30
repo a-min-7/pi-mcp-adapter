@@ -20,9 +20,9 @@ Use shared MCP files when you want one setup to work across hosts, and adapter-o
 | `~/.agents/mcp.json` | User-global tool-agnostic MCP config |
 | `~/.agents/mcp/mcp.json` | User-global tool-agnostic MCP config |
 | `.mcp.json` | Project-local shared MCP config |
-| `<Pi agent dir>/mcp.json` | Pi built-in MCP config; never read by this adapter |
+| `<Pi agent dir>/mcp.json` | Pi's own MCP config; read on Pi 0.99 and later (see below) |
 | `<Pi agent dir>/mcp-adapter.json` | Global adapter settings, imports, and overrides (`~/.pi/agent/mcp-adapter.json` by default) |
-| `.pi/mcp.json` | Project Pi built-in MCP config; never read by this adapter |
+| `.pi/mcp.json` | Pi's own project MCP config; read on Pi 0.99 and later (see below) |
 | `.pi/mcp-adapter.json` | Project adapter settings and overrides |
 
 For local stdio servers, a leading `~/` is expanded to the current user's home
@@ -36,7 +36,26 @@ Pi-specific files are the write targets for imported or shared global servers wh
 
 Preferred user-global shared config: `~/.config/mcp/mcp.json` (for all projects). Pi also reads the tool-agnostic global paths `~/.agents/mcp.json` and `~/.agents/mcp/mcp.json` as compatibility inputs.
 
-The adapter does not read Pi's `<Pi agent dir>/mcp.json` or `.pi/mcp.json` at all. If you previously used either file with this adapter, rename it to `mcp-adapter.json`; the format is unchanged, so a plain `mv` works (merge the files if the target already exists). This leaves `mcp.json` exclusively to Pi's built-in MCP support, so Pi and the adapter never start the same servers.
+On Pi 0.99 and later, the adapter also reads Pi's own `<Pi agent dir>/mcp.json` and `.pi/mcp.json`, so servers added with `pi mcp add` work here. It reads only their `mcpServers` and translates each entry:
+
+| Pi field | Adapter field |
+|---|---|
+| `command`, `args`, `env`, `cwd`, `url`, `headers`, `description` | same |
+| `type: "stdio"`, `"http"`, `"streamable-http"` | dropped |
+| `enabled: false` | `disabled: true` |
+| `timeout` (seconds) | `requestTimeoutMs` |
+| `oauth.clientId`, `clientSecret`, `scope`, `clientName` | same |
+| `oauth.callbackPort` | `oauth.redirectUri: "http://127.0.0.1:<port>/callback"` |
+| `oauth.callbackUrl` | `oauth.redirectUri`; without a port it gets `callbackPort`, or `{port}` |
+| `exposure: "direct"` / `"deferred"` / `"codemode"` / `"hidden"` | `directTools: true` / `directTools: "search"` / proxy only / `disabled: true` |
+| `toolExposure` exact names set to `"direct"` | `directTools: [names]` |
+| `toolExposure` entries set to `"hidden"` | `excludeTools`, which can hide more than Pi's `hidden` |
+
+Entries with `type: "sse"` or `auth: { "provider": ... }`, and entries Pi rejects, are skipped. Other settings without an exact equivalent, such as a per-tool `codemode` or `deferred`, are ignored, and the server keeps its server-level setting. Top-level `settings`, `imports`, `claudePlugins`, and `mcp-servers` come from old adapter configs; they are ignored too and belong in `mcp-adapter.json`. Everything skipped or ignored is reported once per file at startup, and a loaded server's ignored settings are also listed under it in `/mcp-adapter`.
+
+A server in `.pi/mcp.json` replaces the same-named server from `<Pi agent dir>/mcp.json` as a whole, as in Pi. The adapter never writes Pi's files; changes such as direct tools go to the `mcp-adapter.json` in the same folder. `.pi/mcp.json` servers need project trust and approval like `.mcp.json` servers. Exclusive mode reads neither file.
+
+On Pi 0.84 to 0.87, the adapter does not read either file. If you used one with this adapter, rename it to `mcp-adapter.json` (merge the files if the target exists).
 
 Host-specific configs are detected and shown by `/mcp-adapter setup` and `pi-mcp-adapter init`, but they are compatibility inputs rather than normal setup paths and are not loaded automatically. The normal `/mcp-adapter` panel does not scan host-specific files when `settings.hostConfigDiscovery` is `"off"`. To explicitly opt in to host-config fallback discovery, set `settings.hostConfigDiscovery` to `"on"` or run `pi-mcp-adapter init --discover-host-configs`. The default is `"off"`; `"prompt"` is available for integrations that want detection without activation. Host configs are lower precedence than every normal config source, and `/mcp-adapter setup` continues to offer explicit import adoption. Discovery reports source paths, provenance, and same-name conflicts; it never writes to external host files or silently launches commands from them.
 
@@ -47,10 +66,12 @@ Precedence is (later entries win):
 1. `~/.config/mcp/mcp.json`
 2. `~/.agents/mcp.json`
 3. `~/.agents/mcp/mcp.json`
-4. `<Pi agent dir>/mcp-adapter.json`
-5. opted-in ancestors, farthest first: `.mcp.json`, `.pi/mcp-adapter.json`
-6. `.mcp.json`
-7. `.pi/mcp-adapter.json`
+4. `<Pi agent dir>/mcp.json` (Pi 0.99 and later)
+5. `<Pi agent dir>/mcp-adapter.json`
+6. opted-in ancestors, farthest first: `.mcp.json`, `.pi/mcp-adapter.json`
+7. `.mcp.json`
+8. `.pi/mcp.json` (Pi 0.99 and later)
+9. `.pi/mcp-adapter.json`
 
 Ancestor discovery is off by default. To opt in, set `settings.ancestorConfigRoots` in a user-global source (`~/.config/mcp/mcp.json`, either `~/.agents` MCP file, or the global `mcp-adapter.json`) or in the explicitly selected `--mcp-config`/`configPath` file, for example `"ancestorConfigRoots": ["~/work/team"]`. Each root must be an explicit absolute path or `~/...` and resolve to an existing directory under `$HOME`. Roots that do not contain the canonical cwd are ignored. If several roots match, only the nearest (deepest) is used. Project files cannot enable discovery or extend the boundary.
 
@@ -85,7 +106,7 @@ In print, JSON, and RPC sessions, an unapproved project server is skipped. To in
 
 ## Check servers from a shell
 
-`pi-mcp-adapter doctor` loads the config a session in the current directory would, gives each enabled server 15 seconds to connect, and prints one line per server: name, state (`ok`, `failed`, `needs-auth`, `blocked`, or `disabled`), tool count, and the error or a hint. Secret commands (`!command` values) run with their own timeouts. `--json` prints the same report as a JSON array. It exits 1 when an enabled server fails or needs a sign-in; blocked and disabled servers don't count.
+`pi-mcp-adapter doctor` loads the config a session in the current directory would (including Pi's own `mcp.json` files when `pi --version` reports 0.99 or later), gives each enabled server 15 seconds to connect, and prints one line per server: name, state (`ok`, `failed`, `needs-auth`, `blocked`, or `disabled`), tool count, and the error or a hint. Secret commands (`!command` values) run with their own timeouts. `--json` prints the same report as a JSON array. It exits 1 when an enabled server fails or needs a sign-in; blocked and disabled servers don't count.
 
 Project servers follow the trust and approval rules above as in a non-interactive session. If Pi can't be loaded from where the CLI is installed, the project is treated as untrusted. Doctor never starts OAuth: a server without a stored sign-in is reported as `needs-auth`; sign in with `/mcp-auth <server>` in Pi. Errors show only what the adapter can state itself, such as the HTTP status, network error code, or endpoint probe result; doctor never prints server output, response bodies, or configured secrets. Run a failing command directly to see its output.
 

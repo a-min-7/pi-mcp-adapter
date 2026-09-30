@@ -87,6 +87,7 @@ interface ServerState {
   expanded: boolean;
   source: "user" | "project" | "import";
   importKind?: string;
+  ignoredSettings?: string[];
   includeTools?: string[];
   excludeTools?: string[];
   exposeResources: boolean;
@@ -202,6 +203,12 @@ class McpPanelView implements Component {
           if (isCursor && server.connectionStatus === "failed" && server.failureMessage) {
             for (const line of this.wrapText(sanitizeDisplayText(server.failureMessage), innerWidth - 6)) {
               this.addRow(`    ${this.theme.cancel(line)}`, innerWidth);
+            }
+          }
+          if ((isCursor || server.expanded) && server.ignoredSettings) {
+            const text = `Ignored Pi mcp.json settings: ${server.ignoredSettings.join(", ")}`;
+            for (const line of this.wrapText(sanitizeDisplayText(text), innerWidth - 6)) {
+              this.addRow(`    ${this.theme.hint(line)}`, innerWidth);
             }
           }
         } else if (item.toolIndex !== undefined) {
@@ -552,6 +559,7 @@ class McpPanel {
         expanded: false,
         source: prov?.kind ?? "user",
         ...(prov?.importKind !== undefined ? { importKind: prov.importKind } : {}),
+        ...(prov?.ignoredSettings !== undefined ? { ignoredSettings: prov.ignoredSettings } : {}),
         ...(definition.includeTools !== undefined ? { includeTools: definition.includeTools } : {}),
         ...(definition.excludeTools !== undefined ? { excludeTools: definition.excludeTools } : {}),
         exposeResources: definition.exposeResources !== false,
@@ -760,7 +768,7 @@ class McpPanel {
         if (!tool) return;
         this.toggleToolDirect(server, tool);
         if (tool.isDirect && server.source === "import") {
-          this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+          this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
         }
         this.updateDirty();
       }
@@ -919,7 +927,7 @@ class McpPanel {
     if (item.type === "server") {
       const newState = !server.tools.every((t) => t.isDirect);
       if (server.source === "import" && newState) {
-        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
       }
       let directTokens = 0;
       for (const tool of server.tools) {
@@ -933,7 +941,7 @@ class McpPanel {
       if (!tool) return;
       this.toggleToolDirect(server, tool);
       if (tool.isDirect && server.source === "import") {
-        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to user config on save`;
+        this.importNotice = `Imported from ${sanitizeDisplayText(server.importKind ?? "external")} — will copy to adapter config on save`;
       }
     }
     this.updateDirty();
