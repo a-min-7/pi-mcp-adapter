@@ -278,6 +278,28 @@ Older versions stored plaintext entries at `~/.pi/agent/mcp-oauth/sha256-<server
 
 The stored `serverUrl` field ensures credentials are invalidated if the server URL changes.
 
+## Pi provider tokens
+
+An HTTP server can use the token of a provider you signed in to with Pi's `/login`, instead of MCP OAuth. This needs Pi 0.99.2 or later:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": { "provider": "example-provider" }
+    }
+  }
+}
+```
+
+- The adapter asks Pi's model registry for the token on every request, so Pi's refreshes apply at once. The token is sent as `Authorization: Bearer <token>`, and never stored, cached, or shown.
+- The token goes only to the origin (scheme, host, and port) of the server's `url`. Requests carrying it refuse redirects, so it can't follow one to another URL.
+- The `url` must be `https`, or `http` on `localhost`, `127.0.0.1`, or `[::1]`. Other entries are skipped with a notice.
+- Only user-global config may use it; a server defined or overridden by a project file is skipped with a notice. Pi's own `mcp.json` files have the same rule.
+- When Pi has no token for the provider, the request isn't sent and the server shows as needing sign-in. Run `/login <provider>`, then `/mcp-adapter reconnect <server>`. These servers never start MCP OAuth.
+- A session without Pi's model registry can't connect these servers and says why: older Pi, or `createMcpAdapter()` loaded outside a Pi session. `pi-mcp-adapter doctor` reports them as `needs-auth` without connecting, because it can't read Pi's tokens.
+
 ## Headers, bearer tokens, and secret commands
 
 With explicit `auth: "oauth"`, configured HTTP `headers` also accompany native OAuth metadata discovery (including `oauth.authServerMetadataUrl`), dynamic registration, code exchange, and refresh, **only at the configured MCP URL's origin** (scheme, host, and port). Discovered or explicitly configured cross-origin OAuth endpoints receive no configured service headers. SDK-owned headers such as OAuth `Authorization` and content types take precedence over configured `headers`. Requests carrying configured service headers reject all HTTP redirects, including same-origin redirects; configure the final endpoint directly. Browser authorization navigation and loopback callbacks do not use these headers. Missing or empty header credentials fail closed.
