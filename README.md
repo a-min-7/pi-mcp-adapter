@@ -921,7 +921,7 @@ To hide specific tools while still using `directTools: true`, add `excludeTools`
 {
   "mcpServers": {
     "figma": {
-      "url": "http://localhost:3845/mcp",
+      "url": "http://127.0.0.1:3845/mcp",
       "directTools": true,
       "excludeTools": ["read_figjam", "figma_get_code_connect_map"]
     }
@@ -949,7 +949,9 @@ When you change direct-tool toggles in `/mcp-adapter`, the extension updates dir
 
 **Interactive configuration:** Run `/mcp-adapter` to open an interactive panel showing all servers with connection status, tools, and direct/proxy toggles. `/mcp` is also available as an alias when Pi's built-in MCP extension is not installed. You can reconnect servers, toggle tools between direct and proxy, and enable or disable servers (`ctrl+d`) from the same overlay. For OAuth, press Enter on a server that needs auth or `ctrl+a` on any OAuth server. The Save action defaults to `ctrl+s` and can be remapped with the `mcp.panel.save` keybinding.
 
-**Guided first-run setup:** Run `/mcp-adapter setup` to choose the normal write target for new shared servers — project `.mcp.json` or global `~/.config/mcp/mcp.json` — inspect detected shared MCP files, adopt compatibility imports from other hosts, open discovered config paths, preview exact before/after file diffs for writes, scaffold a minimal selected config, add a curated known server (DeepWiki, Context7, Notion, GitHub, or Chrome DevTools), or quick-add RepoPrompt into a standard/shared MCP file.
+**Guided first-run setup:** Run `/mcp-adapter setup` to choose the normal write target for new shared servers — project `.mcp.json` or global `~/.config/mcp/mcp.json` — inspect detected shared MCP files, adopt compatibility imports from other hosts, open discovered config paths, preview exact before/after file diffs for writes, scaffold a minimal selected config, add a curated known server (DeepWiki, Context7, Notion, GitHub, Chrome DevTools, or Figma (desktop) when the Figma app is installed), or quick-add RepoPrompt into a standard/shared MCP file.
+
+**Figma:** Figma's remote server, `https://mcp.figma.com/mcp`, only accepts approved clients, and Pi isn't approved yet. Use the Figma desktop app's local server instead: run `/mcp-adapter setup` and add Figma (desktop). It needs a Dev or Full seat on a paid Figma plan; to turn it on, open a Design file, switch to Dev Mode (Shift+D), and click "Enable desktop MCP server" in the inspect panel.
 
 **Subagent integration:** If you use the subagent extension, agents can request direct MCP tools in their frontmatter with `mcp:server-name` syntax. See the subagent README for details.
 
