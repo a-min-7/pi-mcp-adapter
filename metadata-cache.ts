@@ -150,13 +150,13 @@ export function saveObservedOutput(
   });
 }
 
-/** Output shapes to carry into a rewritten cache entry: same config, and only tools whose definition kept its shape key. */
+/** Output shapes to carry into a rewritten cache entry: same config, not private, and only tools whose definition kept its shape key. */
 export function keepOutputShapes(
   previous: ServerCacheEntry | undefined,
   configHash: string,
   tools: CachedTool[],
 ): ServerCacheEntry["outputShapes"] {
-  if (!previous?.outputShapes || previous.configHash !== configHash) return undefined;
+  if (!previous?.outputShapes || previous.configHash !== configHash || previous.cacheScope === "private") return undefined;
   const kept = Object.entries(previous.outputShapes).filter(([toolName]) => {
     const before = previous.tools?.find(tool => tool.name === toolName);
     const after = tools.find(tool => tool.name === toolName);
@@ -179,6 +179,8 @@ export function isServerCacheValid(
   }
   if (!entry || entry.configHash !== configHash) return false;
   if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
+  // The persistent cache is not partitioned by authorization context.
+  if (entry.cacheScope === "private") return false;
   const declaredTtlMs = entry.ttlMs;
   if (typeof declaredTtlMs === "number" && Number.isSafeInteger(declaredTtlMs) && declaredTtlMs >= 0) {
     if (declaredTtlMs === 0) return false;
