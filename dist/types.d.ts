@@ -615,6 +615,8 @@ export interface ServerCacheEntry {
         source: "structuredContent" | "jsonText";
         shape: unknown;
     }>;
+    /** Startup discovery failed for this config; the entry has no catalog. */
+    discoveryFailed?: true;
     cachedAt: number;
 }
 export interface MetadataCache {

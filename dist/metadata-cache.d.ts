@@ -3,7 +3,9 @@ import { type ToolPrefix, type ToolSelectorCandidateIndex } from "./types.ts";
 export type { CachedPrompt, CachedResource, CachedTool, MetadataCache, ServerCacheEntry } from "./types.ts";
 export declare function getMetadataCachePath(): string;
 export declare function loadMetadataCache(): MetadataCache | null;
-export declare function saveMetadataCache(cache: MetadataCache): void;
+export declare function saveMetadataCache(cache: MetadataCache, options?: {
+    startupSnapshot?: MetadataCache["servers"];
+}): void;
 export declare function computeServerHash(definition: ServerEntry, environment?: NodeJS.ProcessEnv): string;
 /**
  * Identifies the tool definition an output shape was learned against. A shape is only used or saved while

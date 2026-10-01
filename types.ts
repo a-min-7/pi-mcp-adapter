@@ -830,6 +830,8 @@ export interface ServerCacheEntry {
    * keyed by original tool name. Dropped when the server config or that tool's description or input schema changes.
    */
   outputShapes?: Record<string, { source: "structuredContent" | "jsonText"; shape: unknown }>;
+  /** Startup discovery failed for this config; the entry has no catalog. */
+  discoveryFailed?: true;
   cachedAt: number;
 }
 

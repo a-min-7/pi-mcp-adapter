@@ -31,8 +31,33 @@ export function loadMetadataCache() {
         return null;
     }
 }
-export function saveMetadataCache(cache) {
-    updateMetadataCacheFile(servers => ({ ...servers, ...cache.servers }));
+export function saveMetadataCache(cache, options = {}) {
+    updateMetadataCacheFile(servers => {
+        const next = { ...servers };
+        for (const [name, entry] of Object.entries(cache.servers)) {
+            // Startup batch: a catalog is written unless disk has a newer catalog for the same config, and keeps output shapes
+            // saved meanwhile. A failure marker is written only if disk is unchanged since the startup snapshot, so it never
+            // destroys what another session wrote during the pass.
+            const disk = servers[name];
+            if (!options.startupSnapshot) {
+                next[name] = entry;
+            }
+            else if (entry.discoveryFailed) {
+                if (JSON.stringify(disk) === JSON.stringify(options.startupSnapshot[name]))
+                    next[name] = entry;
+            }
+            else if (disk && !disk.discoveryFailed && disk.configHash === entry.configHash) {
+                if ((disk.cachedAt ?? 0) > entry.cachedAt)
+                    continue;
+                const outputShapes = { ...entry.outputShapes, ...keepOutputShapes(disk, entry.configHash, entry.tools) };
+                next[name] = Object.keys(outputShapes).length > 0 ? { ...entry, outputShapes } : entry;
+            }
+            else {
+                next[name] = entry;
+            }
+        }
+        return next;
+    });
 }
 /** Reads the cache file, applies one update, and writes the result; an update returning undefined skips the write. */
 function updateMetadataCacheFile(update) {
@@ -140,6 +165,8 @@ maxAgeMs = 0, environment = process.env) {
         return false;
     // The persistent cache is not partitioned by authorization context.
     if (entry.cacheScope === "private")
+        return false;
+    if (entry.discoveryFailed)
         return false;
     const declaredTtlMs = entry.ttlMs;
     if (typeof declaredTtlMs === "number" && Number.isSafeInteger(declaredTtlMs) && declaredTtlMs >= 0) {
